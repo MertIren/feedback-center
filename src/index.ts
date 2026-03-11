@@ -20,6 +20,7 @@ app.get('/', (c) => {
 app.get('/api/feedback', async (c) => {
   const source = c.req.query('source');
   const sentiment = c.req.query('sentiment');
+  const theme = c.req.query('theme');
 
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -31,6 +32,10 @@ app.get('/api/feedback', async (c) => {
   if (sentiment) {
     conditions.push('sentiment = ?');
     params.push(sentiment);
+  }
+  if (theme) {
+    conditions.push('theme = ?');
+    params.push(theme);
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';

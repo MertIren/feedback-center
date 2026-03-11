@@ -44,6 +44,9 @@ export function renderHTML(): string {
   .themes-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .pill { background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; font-size: 12px; color: var(--text); }
   .pill.count { font-size: 11px; color: var(--muted); margin-left: 2px; }
+  .clickable-stat { cursor: pointer; transition: opacity 0.2s; }
+  .clickable-stat:hover { opacity: 0.7; }
+
 
   /* Search & filters */
   .toolbar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
@@ -68,7 +71,12 @@ export function renderHTML(): string {
   .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
   table { width: 100%; border-collapse: collapse; }
   thead th { background: var(--surface2); padding: 10px 14px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.7px; color: var(--muted); border-bottom: 1px solid var(--border); white-space: nowrap; }
-  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+  th.sortable { cursor: pointer; user-select: none; transition: color 0.15s; }
+  th.sortable:hover { color: var(--text); }
+  th.sortable .sort-icon { display: inline-block; width: 14px; text-align: center; color: var(--muted); }
+  th.sortable.active { color: var(--text); }
+  th.sortable.active .sort-icon { color: var(--accent); }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; cursor: pointer; }
   tbody tr:last-child { border-bottom: none; }
   tbody tr:hover { background: var(--surface2); }
   tbody tr.highlighted { background: rgba(88, 166, 255, 0.06); border-left: 2px solid var(--accent); }
@@ -111,6 +119,7 @@ export function renderHTML(): string {
   .toast.success { border-color: var(--green); }
   .toast.error { border-color: var(--red); }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 <div class="app">
@@ -167,6 +176,9 @@ export function renderHTML(): string {
       <option value="neutral">Neutral</option>
       <option value="negative">Negative</option>
     </select>
+    <select id="filterTheme" style="max-width: 150px;">
+      <option value="">All Themes</option>
+    </select>
     <button class="btn btn-outline btn-sm" id="clearFiltersBtn">Clear</button>
   </div>
 
@@ -175,16 +187,32 @@ export function renderHTML(): string {
     <button class="btn btn-outline btn-sm" id="clearSearchBtn">Clear search</button>
   </div>
 
+  <!-- Chart -->
+  <div class="chart-wrap" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <h3 style="font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 0;">Sentiment Over Time</h3>
+      <select id="chartGrouping" style="padding: 4px 8px; font-size: 11px;">
+        <option value="1">Daily</option>
+        <option value="7" selected>Weekly</option>
+        <option value="14">Every 2 Weeks</option>
+        <option value="30">Monthly</option>
+      </select>
+    </div>
+    <div style="height: 250px;">
+      <canvas id="sentimentChart"></canvas>
+    </div>
+  </div>
+
   <!-- Table -->
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Source</th>
-          <th>Summary / Author</th>
-          <th>Theme</th>
-          <th>Sentiment</th>
-          <th>Date</th>
+          <th class="sortable" data-sort="source">Source <span class="sort-icon"></span></th>
+          <th class="sortable" data-sort="author">Summary / Author <span class="sort-icon"></span></th>
+          <th class="sortable" data-sort="theme">Theme <span class="sort-icon"></span></th>
+          <th class="sortable" data-sort="sentiment_score">Sentiment <span class="sort-icon"></span></th>
+          <th class="sortable active" data-sort="created_at">Date <span class="sort-icon">▼</span></th>
         </tr>
       </thead>
       <tbody id="tableBody">
@@ -226,6 +254,26 @@ export function renderHTML(): string {
   </div>
 </div>
 
+<!-- View Feedback Modal -->
+<div class="modal-overlay" id="viewModalOverlay">
+  <div class="modal" style="max-width: 600px;">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 16px;">
+      <h2 id="viewModalTitle" style="margin-bottom:0;">Feedback Details</h2>
+      <button type="button" class="btn btn-outline btn-sm" id="closeViewModalBtn">Close</button>
+    </div>
+    <div style="margin-bottom: 20px; display: flex; gap: 8px; flex-wrap: wrap;" id="viewModalBadges">
+    </div>
+    <div class="form-group">
+      <label>Author</label>
+      <div id="viewModalAuthor" style="color:var(--text); font-size:14px; background:var(--surface2); padding:8px 12px; border-radius:6px;"></div>
+    </div>
+    <div class="form-group">
+      <label>Full Content</label>
+      <div id="viewModalContent" style="color:var(--text); font-size:14px; background:var(--surface2); padding:12px; border-radius:6px; min-height: 100px; white-space: pre-wrap; line-height: 1.6;"></div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -234,6 +282,9 @@ export function renderHTML(): string {
   let allFeedback = [];
   let searchResults = null; // null = not in search mode
   let searchQuery = '';
+  let chartInstance = null;
+  let sortCol = 'created_at';
+  let sortDesc = true;
 
   // ── Helpers ────────────────────────────────────────────
   function fmt(iso) {
@@ -257,6 +308,60 @@ export function renderHTML(): string {
   }
 
   // ── Stats ──────────────────────────────────────────────
+  function setupStatClickHandlers() {
+    // Sentiment
+    document.querySelectorAll('#statPos, #statNeu, #statNeg').forEach(el => {
+      el.classList.add('clickable-stat');
+      el.addEventListener('click', function() {
+        let sent = '';
+        if (this.id === 'statPos') sent = 'positive';
+        if (this.id === 'statNeu') sent = 'neutral';
+        if (this.id === 'statNeg') sent = 'negative';
+        document.getElementById('filterSentiment').value = sent;
+        loadFeedback();
+      });
+    });
+
+    // Sources
+    document.getElementById('statSources').addEventListener('click', function(e) {
+      const badge = e.target.closest('.badge');
+      if (!badge) return;
+      const srcClass = Array.from(badge.classList).find(c => c.startsWith('src-'));
+      if (srcClass) {
+        document.getElementById('filterSource').value = srcClass.replace('src-', '');
+        loadFeedback();
+      }
+    });
+
+    // Themes (Exact DB Filtering)
+    document.getElementById('statThemes').addEventListener('click', function(e) {
+      const pill = e.target.closest('.pill');
+      if (!pill) return;
+      // Get the text without the child span count
+      const themeText = pill.childNodes[0].textContent.trim();
+      
+      // Select it in the dropdown if available (we dynamically populated it)
+      const select = document.getElementById('filterTheme');
+      let found = false;
+      for (const opt of select.options) {
+        if (opt.value === themeText) {
+          select.value = themeText;
+          found = true;
+          break;
+        }
+      }
+      
+      // If it's a theme not in top 5, temporarily add it to select so it can be filtered
+      if (!found) {
+        const tempOpt = new Option(themeText, themeText);
+        select.add(tempOpt);
+        select.value = themeText;
+      }
+      
+      loadFeedback();
+    });
+  }
+
   async function loadStats() {
     try {
       const r = await fetch('/api/stats');
@@ -270,13 +375,27 @@ export function renderHTML(): string {
       const src = d.source_breakdown || {};
       document.getElementById('statSources').innerHTML = Object.entries(src)
         .sort((a, b) => b[1] - a[1])
-        .map(([k, v]) => '<span class="badge src-' + k + '">' + k + ' ' + v + '</span>')
+        .map(([k, v]) => '<span class="badge src-' + k + ' clickable-stat">' + k + ' ' + v + '</span>')
         .join('');
 
       const themes = d.top_themes || [];
       document.getElementById('statThemes').innerHTML = themes
-        .map(t => '<span class="pill">' + t.theme + '<span class="count">×' + t.count + '</span></span>')
+        .map(t => '<span class="pill clickable-stat">' + t.theme + '<span class="count">×' + t.count + '</span></span>')
         .join('') || '<span style="color:var(--muted);font-size:12px">No themes yet</span>';
+        
+      // Populate theme dropdown
+      const themeSelect = document.getElementById('filterTheme');
+      // Keep only 'All Themes'
+      themeSelect.innerHTML = '<option value="">All Themes</option>';
+      themes.forEach(t => {
+        themeSelect.add(new Option(t.theme, t.theme));
+      });
+      
+      // Keep selected value if it exists
+      const currentTheme = new URLSearchParams(window.location.search).get('theme') || document.getElementById('filterTheme').value;
+      if (currentTheme) themeSelect.value = currentTheme;
+      
+      setupStatClickHandlers();
     } catch (e) {
       console.error('Stats load failed', e);
     }
@@ -286,9 +405,18 @@ export function renderHTML(): string {
   async function loadFeedback() {
     const source = document.getElementById('filterSource').value;
     const sentiment = document.getElementById('filterSentiment').value;
+    const theme = document.getElementById('filterTheme').value;
     const params = new URLSearchParams();
     if (source) params.set('source', source);
     if (sentiment) params.set('sentiment', sentiment);
+    if (theme) params.set('theme', theme);
+    
+    // Clear fuzzy search visually since we are using exact filters
+    document.getElementById('searchInput').value = '';
+    document.getElementById('searchBanner').classList.remove('visible');
+    searchResults = null;
+    searchQuery = '';
+    
     try {
       const r = await fetch('/api/feedback?' + params);
       allFeedback = await r.json();
@@ -298,15 +426,32 @@ export function renderHTML(): string {
     }
   }
 
-  function renderTable(rows, highlightIds) {
+  function renderTable(rows, highlightIds, skipChartRender = false) {
     const tbody = document.getElementById('tableBody');
     if (!rows.length) {
       tbody.innerHTML = '<tr><td colspan="5" class="empty">No feedback found.</td></tr>';
       return;
     }
-    tbody.innerHTML = rows.map(f => {
+    
+    const sortedRows = [...rows].sort((a, b) => {
+      let valA = a[sortCol];
+      let valB = b[sortCol];
+      
+      // Fallbacks
+      if (valA == null) valA = '';
+      if (valB == null) valB = '';
+      
+      if (typeof valA === 'string') valA = valA.toLowerCase();
+      if (typeof valB === 'string') valB = valB.toLowerCase();
+      
+      if (valA < valB) return sortDesc ? 1 : -1;
+      if (valA > valB) return sortDesc ? -1 : 1;
+      return 0;
+    });
+
+    tbody.innerHTML = sortedRows.map(f => {
       const hl = highlightIds && highlightIds.includes(f.id) ? ' highlighted' : '';
-      return '<tr class="' + hl + '">' +
+      return '<tr class="' + hl + '" data-id="' + f.id + '">' +
         '<td>' + sourceBadge(f.source) + '</td>' +
         '<td class="td-summary"><p>' + escHtml(f.summary || f.content.slice(0, 120)) + '</p><div class="author">@' + escHtml(f.author) + '</div></td>' +
         '<td>' + (f.theme ? '<span class="theme-pill">' + escHtml(f.theme) + '</span>' : '—') + '</td>' +
@@ -314,6 +459,126 @@ export function renderHTML(): string {
         '<td style="color:var(--muted);font-size:12px;white-space:nowrap">' + fmt(f.created_at) + '</td>' +
         '</tr>';
     }).join('');
+    
+    // Add row click handlers for View Modal
+    tbody.querySelectorAll('tr[data-id]').forEach(tr => {
+      tr.addEventListener('click', function() {
+        const id = this.getAttribute('data-id');
+        const fb = allFeedback.find(x => x.id === id) || (searchResults && searchResults.find(x => x.id === id));
+        if (fb) openViewModal(fb);
+      });
+    });
+    
+    if (!skipChartRender) {
+      renderChart(rows);
+    }
+  }
+
+  function renderChart(data) {
+    const ctx = document.getElementById('sentimentChart').getContext('2d');
+    
+    if (chartInstance) {
+      chartInstance.destroy();
+    }
+    
+    if (!data || data.length === 0) {
+      return;
+    }
+
+    // Sort chronologically ascending for the chart
+    const sortedData = [...data].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    
+    // Group by selected interval and calculate average sentiment
+    const groupingDays = parseInt(document.getElementById('chartGrouping').value, 10);
+    const msPerInterval = groupingDays * 24 * 60 * 60 * 1000;
+    
+    const intervalStats = {};
+    sortedData.forEach(item => {
+      const d = new Date(item.created_at);
+      
+      let intervalKey;
+      if (groupingDays === 1) {
+        intervalKey = d.toISOString().split('T')[0];
+      } else {
+        // Floor to the nearest interval starting epoch
+        const intervalTime = Math.floor(d.getTime() / msPerInterval) * msPerInterval;
+        const intervalDate = new Date(intervalTime);
+        intervalKey = intervalDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+
+      if (!intervalStats[intervalKey]) {
+        intervalStats[intervalKey] = { sum: 0, count: 0, items: [] };
+      }
+      intervalStats[intervalKey].sum += item.sentiment_score;
+      intervalStats[intervalKey].count += 1;
+      intervalStats[intervalKey].items.push(item);
+    });
+
+    const labels = Object.keys(intervalStats);
+    const dataPoints = labels.map(key => intervalStats[key].sum / intervalStats[key].count);
+
+    chartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Average Sentiment',
+          data: dataPoints,
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88, 166, 255, 0.2)',
+          borderWidth: 2,
+          pointBackgroundColor: dataPoints.map(val => val > 0 ? '#3fb950' : val < 0 ? '#f85149' : '#8b949e'),
+          pointBorderColor: '#161b22',
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          fill: true,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        onClick: (e, activeElements) => {
+          if (activeElements.length > 0) {
+            const index = activeElements[0].index;
+            const label = labels[index];
+            const clickedItems = intervalStats[label].items;
+            
+            // Filter the table securely
+            searchQuery = 'chart-filter';
+            searchResults = clickedItems;
+            
+            const banner = document.getElementById('searchBanner');
+            banner.classList.add('visible');
+            document.getElementById('searchBannerText').textContent =
+               'Showing ' + clickedItems.length + ' feedback entries for ' + label;
+            
+            // skip re-rendering chart so it stays visible
+            renderTable(clickedItems, null, true); 
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => \` Avg Sentiment: \${ctx.raw.toFixed(2)} (\${intervalStats[ctx.label].count} feedback)\`
+            }
+          }
+        },
+        scales: {
+          y: {
+            min: -1,
+            max: 1,
+            grid: { color: '#30363d' },
+            ticks: { color: '#8b949e' }
+          },
+          x: {
+            grid: { display: false },
+            ticks: { color: '#8b949e' }
+          }
+        }
+      }
+    });
   }
 
   function escHtml(s) {
@@ -360,9 +625,15 @@ export function renderHTML(): string {
   // ── Filters ────────────────────────────────────────────
   document.getElementById('filterSource').addEventListener('change', loadFeedback);
   document.getElementById('filterSentiment').addEventListener('change', loadFeedback);
+  document.getElementById('filterTheme').addEventListener('change', loadFeedback);
+  document.getElementById('chartGrouping').addEventListener('change', () => {
+    // Just re-render the chart with current data instead of a full reload
+    renderChart(allFeedback.length && searchResults ? searchResults : allFeedback);
+  });
   document.getElementById('clearFiltersBtn').addEventListener('click', function () {
     document.getElementById('filterSource').value = '';
     document.getElementById('filterSentiment').value = '';
+    document.getElementById('filterTheme').value = '';
     clearSearch();
     loadFeedback();
   });
@@ -379,6 +650,29 @@ export function renderHTML(): string {
     if (e.target === this) {
       this.classList.remove('open');
       document.getElementById('feedbackForm').reset();
+    }
+  });
+
+  // View Modal
+  function openViewModal(fb) {
+    document.getElementById('viewModalAuthor').textContent = '@' + fb.author;
+    document.getElementById('viewModalContent').textContent = fb.content;
+    
+    const badgesHtml = sourceBadge(fb.source) + sentBadge(fb.sentiment, fb.sentiment_score) + 
+      (fb.theme ? '<span class="theme-pill">' + escHtml(fb.theme) + '</span>' : '') +
+      '<span style="color:var(--muted);font-size:12px;margin-left:auto;">' + fmt(fb.created_at) + '</span>';
+      
+    document.getElementById('viewModalBadges').innerHTML = badgesHtml;
+    document.getElementById('viewModalOverlay').classList.add('open');
+  }
+
+  document.getElementById('closeViewModalBtn').addEventListener('click', () => {
+    document.getElementById('viewModalOverlay').classList.remove('open');
+  });
+
+  document.getElementById('viewModalOverlay').addEventListener('click', function (e) {
+    if (e.target === this) {
+      this.classList.remove('open');
     }
   });
 
@@ -442,6 +736,28 @@ export function renderHTML(): string {
       this.innerHTML = 'Wipe Data';
       this.disabled = false;
     }
+  });
+
+  // ── Sorting ────────────────────────────────────────────
+  document.querySelectorAll('th.sortable').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.getAttribute('data-sort');
+      if (sortCol === col) {
+        sortDesc = !sortDesc;
+      } else {
+        sortCol = col;
+        sortDesc = (col === 'created_at' || col === 'sentiment_score');
+      }
+      
+      document.querySelectorAll('th.sortable').forEach(el => {
+        el.classList.remove('active');
+        el.querySelector('.sort-icon').textContent = '';
+      });
+      th.classList.add('active');
+      th.querySelector('.sort-icon').textContent = sortDesc ? '▼' : '▲';
+      
+      renderTable(searchResults ? searchResults : allFeedback, null);
+    });
   });
 
   // ── Init ───────────────────────────────────────────────
