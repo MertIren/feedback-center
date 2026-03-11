@@ -166,31 +166,37 @@ app.post('/api/seed', async (c) => {
   let inserted = 0;
   const errors: string[] = [];
 
-  for (const entry of SEED_DATA) {
-    // Skip if already exists
-    const existing = await c.env.DB.prepare('SELECT id FROM feedback WHERE id = ?').bind(entry.id).first();
-    if (existing) continue;
+  // Process in chunks of 5 to run AI analysis concurrently without hitting rate limits
+  const chunkSize = 5;
+  for (let i = 0; i < SEED_DATA.length; i += chunkSize) {
+    const chunk = SEED_DATA.slice(i, i + chunkSize);
+    
+    await Promise.all(chunk.map(async (entry) => {
+      // Skip if already exists
+      const existing = await c.env.DB.prepare('SELECT id FROM feedback WHERE id = ?').bind(entry.id).first();
+      if (existing) return;
 
-    try {
-      const analysis = await analyzeFeedback(c.env, entry.content);
+      try {
+        const analysis = await analyzeFeedback(c.env, entry.content);
 
-      await c.env.DB.prepare(
-        `INSERT INTO feedback (id, source, content, author, created_at, sentiment, sentiment_score, theme, summary, embedded)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
-      )
-        .bind(entry.id, entry.source, entry.content, entry.author, entry.created_at,
-          analysis.sentiment, analysis.sentiment_score, analysis.theme, analysis.summary)
-        .run();
+        await c.env.DB.prepare(
+          `INSERT INTO feedback (id, source, content, author, created_at, sentiment, sentiment_score, theme, summary, embedded)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+        )
+          .bind(entry.id, entry.source, entry.content, entry.author, entry.created_at,
+            analysis.sentiment, analysis.sentiment_score, analysis.theme, analysis.summary)
+          .run();
 
-      // Embed async (fire and forget per entry)
-      c.executionCtx.waitUntil(
-        embedAndIndex(c.env, entry.id, entry.content, analysis.theme ?? '', analysis.sentiment)
-      );
+        // Embed async (fire and forget per entry)
+        c.executionCtx.waitUntil(
+          embedAndIndex(c.env, entry.id, entry.content, analysis.theme ?? '', analysis.sentiment)
+        );
 
-      inserted++;
-    } catch (err) {
-      errors.push(`${entry.id}: ${String(err)}`);
-    }
+        inserted++;
+      } catch (err) {
+        errors.push(`${entry.id}: ${String(err)}`);
+      }
+    }));
   }
 
   return c.json({ inserted, errors });
